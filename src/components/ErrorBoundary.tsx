@@ -38,8 +38,7 @@ export class ErrorBoundary extends Component<Props, State> {
             <div className="flex gap-4 justify-center">
               <Button
                 onClick={() => {
-                  this.setState({ hasError: false, error: null });
-                  window.location.href = '/';
+                  window.location.assign('/');
                 }}
               >
                 হোমে ফিরে যান

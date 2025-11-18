@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
@@ -12,7 +12,7 @@ import { ShoppingCart, ArrowLeft, Plus, Minus, Package, DollarSign, TrendingUp }
 import { Loader2 } from 'lucide-react';
 import { trackProductView, trackProductClick } from '@/hooks/useTracking';
 import { LazyImage } from '@/components/LazyImage';
-import { fbqTrack } from '../fbpixel';
+import { fbqTrack, initFacebookPixel } from '@/fbpixel';
 
 interface Product {
   id: string;
@@ -27,6 +27,12 @@ interface Product {
 }
 
 const ProductDetails = () => {
+  const isMounted = useRef(true);
+  useEffect(() => {
+    initFacebookPixel();
+    fbqTrack("PageView");
+    return () => { isMounted.current = false; };
+  }, []);
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { addItem } = useCart();
@@ -34,6 +40,82 @@ const ProductDetails = () => {
   const [loading, setLoading] = useState(true);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [quantity, setQuantity] = useState(1);
+
+  const fetchProduct = async () => {
+    if (!id) {
+      console.error('Product ID is missing');
+      setLoading(false);
+      navigate('/');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      // Try to fetch with all columns first
+      const { data, error } = await supabase
+        .from('products')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (error) {
+        // If error is about images column, try without it
+        const errorMessage = error.message || '';
+        if (errorMessage.includes('images') || errorMessage.includes('column') || errorMessage.includes('does not exist')) {
+          const { data: fallbackData, error: fallbackError } = await supabase
+            .from('products')
+            .select('id, name, description, price, image_url, stock, created_at, cost_price')
+            .eq('id', id)
+            .single();
+          
+          if (fallbackError) throw fallbackError;
+          
+          // Add images from image_url
+          setProduct({
+            ...(fallbackData as any),
+            image_url: (fallbackData as any).image_url,
+            images: (fallbackData as any).image_url ? [(fallbackData as any).image_url] : undefined,
+          });
+        } else {
+          throw error;
+        }
+      } else {
+        // Successfully fetched, parse images
+        let images: string[] | undefined = undefined;
+        if ((data as any).images !== undefined && (data as any).images !== null) {
+          if (typeof (data as any).images === 'string') {
+            try {
+              const parsed = JSON.parse((data as any).images);
+              images = Array.isArray(parsed) 
+                ? parsed.filter((img: any) => img && typeof img === 'string' && img.trim())
+                : ((data as any).images && (data as any).images.trim() ? [(data as any).images] : undefined);
+            } catch {
+              images = (data as any).images && (data as any).images.trim() ? [(data as any).images] : undefined;
+            }
+          } else if (Array.isArray((data as any).images)) {
+            images = (data as any).images.filter((img: any) => img && typeof img === 'string' && img.trim());
+          }
+        }
+        
+        // Fallback to image_url if no images array
+        if ((!images || images.length === 0) && data.image_url && data.image_url.trim()) {
+          images = [data.image_url];
+        }
+
+        setProduct({
+          ...(data as any),
+          image_url: (data as any).image_url,
+          images: images && images.length > 0 ? images : undefined,
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching product:', error);
+      toast.error('পণ্য লোড করতে সমস্যা হয়েছে');
+      navigate('/');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (id) {
@@ -80,79 +162,6 @@ const ProductDetails = () => {
     return () => clearInterval(interval);
   }, [hasMultipleImages, allImages.length]);
 
-  const fetchProduct = async () => {
-    if (!id) {
-      console.error('Product ID is missing');
-      setLoading(false);
-      navigate('/');
-      return;
-    }
-
-    try {
-      setLoading(true);
-      // Try to fetch with all columns first
-      const { data, error } = await supabase
-        .from('products')
-        .select('*')
-        .eq('id', id)
-        .single();
-
-      if (error) {
-        // If error is about images column, try without it
-        const errorMessage = error.message || '';
-        if (errorMessage.includes('images') || errorMessage.includes('column') || errorMessage.includes('does not exist')) {
-          const { data: fallbackData, error: fallbackError } = await supabase
-            .from('products')
-            .select('id, name, description, price, image_url, stock, created_at, cost_price')
-            .eq('id', id)
-            .single();
-          
-          if (fallbackError) throw fallbackError;
-          
-          // Add images from image_url
-          setProduct({
-            ...fallbackData,
-            images: fallbackData.image_url ? [fallbackData.image_url] : undefined,
-          });
-        } else {
-          throw error;
-        }
-      } else {
-        // Successfully fetched, parse images
-        let images: string[] | undefined = undefined;
-        if (data.images !== undefined && data.images !== null) {
-          if (typeof data.images === 'string') {
-            try {
-              const parsed = JSON.parse(data.images);
-              images = Array.isArray(parsed) 
-                ? parsed.filter((img: any) => img && typeof img === 'string' && img.trim())
-                : (data.images && data.images.trim() ? [data.images] : undefined);
-            } catch {
-              images = data.images && data.images.trim() ? [data.images] : undefined;
-            }
-          } else if (Array.isArray(data.images)) {
-            images = data.images.filter((img: any) => img && typeof img === 'string' && img.trim());
-          }
-        }
-        
-        // Fallback to image_url if no images array
-        if ((!images || images.length === 0) && data.image_url && data.image_url.trim()) {
-          images = [data.image_url];
-        }
-
-        setProduct({
-          ...data,
-          images: images && images.length > 0 ? images : undefined,
-        });
-      }
-    } catch (error) {
-      console.error('Error fetching product:', error);
-      toast.error('পণ্য লোড করতে সমস্যা হয়েছে');
-      navigate('/');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleAddToCart = async () => {
     if (!product) return;
@@ -216,7 +225,7 @@ const ProductDetails = () => {
     });
     
     setTimeout(() => {
-      navigate('/cart');
+      if (isMounted.current) navigate('/cart');
     }, 500);
   };
 
@@ -273,26 +282,28 @@ const ProductDetails = () => {
               <div className="aspect-square overflow-hidden bg-gradient-to-br from-muted to-muted/50 relative">
                 {allImages.length > 0 && allImages[currentImageIndex] && typeof allImages[currentImageIndex] === 'string' ? (
                   <>
-                    {allImages[currentImageIndex].includes('video') || 
-                     allImages[currentImageIndex].endsWith('.mp4') || 
-                     allImages[currentImageIndex].endsWith('.webm') ? (
-                      <video
-                        src={allImages[currentImageIndex]}
-                        className="w-full h-full object-cover"
-                        autoPlay
-                        loop
-                        muted
-                        playsInline
-                        controls
-                      />
-                    ) : (
-                      <LazyImage
-                        src={allImages[currentImageIndex]}
-                        alt={product.name}
-                        className="w-full h-full object-cover transition-all duration-500"
-                        placeholder="📦"
-                      />
-                    )}
+                    <div className="media-container">
+                      {allImages[currentImageIndex].includes('video') || 
+                       allImages[currentImageIndex].endsWith('.mp4') || 
+                       allImages[currentImageIndex].endsWith('.webm') ? (
+                        <video
+                          src={allImages[currentImageIndex]}
+                          className="w-full h-full object-cover"
+                          autoPlay
+                          loop
+                          muted
+                          playsInline
+                          controls
+                        />
+                      ) : (
+                        <LazyImage
+                          src={allImages[currentImageIndex]}
+                          alt={product.name}
+                          className="w-full h-full object-cover transition-all duration-500"
+                          placeholder="📦"
+                        />
+                      )}
+                    </div>
                     {hasMultipleImages && (
                       <>
                         <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 flex gap-2 bg-black/50 backdrop-blur-sm px-4 py-2 rounded-full">
@@ -345,7 +356,7 @@ const ProductDetails = () => {
               <div className="grid grid-cols-4 gap-2">
                 {allImages.map((url, index) => (
                   <button
-                    key={index}
+                    key={url}
                     onClick={() => setCurrentImageIndex(index)}
                     className={`aspect-square overflow-hidden rounded-lg border-2 transition-all duration-200 ${
                       index === currentImageIndex
@@ -353,20 +364,22 @@ const ProductDetails = () => {
                         : 'border-border hover:border-primary/50'
                     }`}
                   >
-                    {url.includes('video') || url.endsWith('.mp4') || url.endsWith('.webm') ? (
-                      <video
-                        src={url}
-                        className="w-full h-full object-cover"
-                        muted
-                      />
-                    ) : (
-                      <LazyImage
-                        src={url}
-                        alt={`${product.name} ${index + 1}`}
-                        className="w-full h-full object-cover"
-                        placeholder="📦"
-                      />
-                    )}
+                    <div className="media-container">
+                      {url.includes('video') || url.endsWith('.mp4') || url.endsWith('.webm') ? (
+                        <video
+                          src={url}
+                          className="w-full h-full object-cover"
+                          muted
+                        />
+                      ) : (
+                        <LazyImage
+                          src={url}
+                          alt={`${product.name} ${index + 1}`}
+                          className="w-full h-full object-cover"
+                          placeholder="📦"
+                        />
+                      )}
+                    </div>
                   </button>
                 ))}
               </div>

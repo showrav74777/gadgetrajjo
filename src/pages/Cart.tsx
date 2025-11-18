@@ -1,4 +1,4 @@
-import { fbqTrack } from '@/fbpixel';
+import { fbqTrack, initFacebookPixel } from '@/fbpixel';
 
 // Strict helper to get the first valid image URL
 function getFirstImageUrl(imageData: any): string | null {
@@ -49,6 +49,10 @@ import { toast } from 'sonner';
 import { Trash2, Plus, Minus, CheckCircle2, Loader2 } from 'lucide-react';
 
 const Cart = () => {
+  useEffect(() => {
+    initFacebookPixel();
+    fbqTrack("PageView");
+  }, []);
   const { items, removeItem, updateQuantity, clearCart, totalPrice } = useCart();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
@@ -147,25 +151,26 @@ const Cart = () => {
     setLoading(true);
 
     try {
+      // 1️⃣ Validate and fetch existing products
       const productIds = items.map(item => item.id);
       const { data: existingProducts, error: productsError } = await supabase
         .from('products')
         .select('id, name, stock, price')
         .in('id', productIds);
-
+    
       if (productsError) throw new Error(productsError.message || 'পণ্য যাচাই করতে সমস্যা হয়েছে');
-
-      if (!existingProducts || existingProducts.length !== items.length) {
-        const existingIds = new Set(existingProducts?.map(p => p.id) || []);
-        const missingItems = items.filter(item => !existingIds.has(item.id));
-        if (missingItems.length > 0) {
-          toast.error(`কিছু পণ্য আর পাওয়া যায় না: ${missingItems.map(i => i.name).join(', ')}`);
-          missingItems.forEach(item => removeItem(item.id));
-          setLoading(false);
-          return;
-        }
+    
+      // Check for missing products
+      const existingIds = new Set(existingProducts?.map(p => p.id) || []);
+      const missingItems = items.filter(item => !existingIds.has(item.id));
+      if (missingItems.length > 0) {
+        toast.error(`কিছু পণ্য আর পাওয়া যায় না: ${missingItems.map(i => i.name).join(', ')}`);
+        missingItems.forEach(item => removeItem(item.id));
+        setLoading(false);
+        return;
       }
-
+    
+      // Check stock
       const outOfStockItems: string[] = [];
       for (const item of items) {
         const product = existingProducts?.find(p => p.id === item.id);
@@ -173,13 +178,25 @@ const Cart = () => {
           outOfStockItems.push(`${product.name} (স্টক: ${product.stock})`);
         }
       }
-
       if (outOfStockItems.length > 0) {
         toast.error(`স্টক শেষ: ${outOfStockItems.join(', ')}`);
         setLoading(false);
         return;
       }
-
+    
+      // 2️⃣ Fire InitiateCheckout before order creation
+      fbqTrack("InitiateCheckout", {
+        value: finalTotal,
+        currency: "BDT",
+        num_items: items.length,
+        contents: items.map(i => ({
+          id: i.id,
+          quantity: i.quantity,
+          item_price: i.price,
+        })),
+      });
+    
+      // 3️⃣ Create order
       const { data: orderData, error: orderError } = await supabase
         .from('orders')
         .insert({
@@ -192,35 +209,42 @@ const Cart = () => {
         })
         .select('id')
         .single();
-
+    
       if (orderError) throw new Error(orderError.message || 'অর্ডার তৈরি করতে সমস্যা হয়েছে');
-      if (!orderData || !orderData.id) throw new Error('অর্ডার তৈরি করা হয়েছে কিন্তু ID পাওয়া যায়নি');
-
+      if (!orderData?.id) throw new Error('অর্ডার তৈরি করা হয়েছে কিন্তু ID পাওয়া যায়নি');
+    
       const orderId = orderData.id;
-
-      const orderItems = items
-        .filter(item => existingProducts?.some(p => p.id === item.id))
-        .map((item) => ({
-          order_id: orderId,
-          product_id: item.id,
-          quantity: item.quantity,
-          price: parseFloat(item.price.toFixed(2)),
-        }));
-
-      if (orderItems.length === 0) {
-        await supabase.from('orders').delete().eq('id', orderId);
-        throw new Error('কোন বৈধ পণ্য পাওয়া যায়নি');
-      }
-
+    
+      // 4️⃣ Insert order items
+      const orderItems = items.map(item => ({
+        order_id: orderId,
+        product_id: item.id,
+        quantity: item.quantity,
+        price: parseFloat(item.price.toFixed(2)),
+      }));
+    
       const { error: itemsError } = await supabase
         .from('order_items')
         .insert(orderItems);
-
+    
       if (itemsError) {
         await supabase.from('orders').delete().eq('id', orderId);
         throw new Error(itemsError.message || 'অর্ডার আইটেম যোগ করতে সমস্যা হয়েছে');
       }
-
+    
+      // 5️⃣ Fire Purchase event after order confirmed
+      fbqTrack("Purchase", {
+        value: finalTotal,
+        currency: "BDT",
+        contents: items.map(i => ({
+          id: i.id,
+          quantity: i.quantity,
+          item_price: i.price,
+        })),
+        content_ids: items.map(i => i.id),
+        content_type: "product",
+      });
+    
       setOrderId(orderId);
       setOrderConfirmed(true);
       clearCart();
@@ -231,7 +255,8 @@ const Cart = () => {
     } finally {
       setLoading(false);
     }
-  };
+
+    }
 
   if (items.length === 0) {
     return (
@@ -328,6 +353,7 @@ const Cart = () => {
                 <h2 className="text-lg sm:text-xl font-bold mb-4">অর্ডার সম্পন্ন করুন</h2>
                 
                 <form onSubmit={handleSubmit} className="space-y-4">
+                  
                   <div>
                     <Label htmlFor="name">নাম *</Label>
                     <Input
