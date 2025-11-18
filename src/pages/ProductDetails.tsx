@@ -12,7 +12,9 @@ import { ShoppingCart, ArrowLeft, Plus, Minus, Package, DollarSign, TrendingUp }
 import { Loader2 } from 'lucide-react';
 import { trackProductView, trackProductClick } from '@/hooks/useTracking';
 import { LazyImage } from '@/components/LazyImage';
-import { fbqTrack, initFacebookPixel } from '@/fbpixel';
+
+// FIX: Import the functions using their actual names: trackEvent and initFacebookPixel
+import { trackEvent, initFacebookPixel } from '@/fbpixel'; 
 
 interface Product {
   id: string;
@@ -26,13 +28,46 @@ interface Product {
   created_at: string;
 }
 
+// === BEGIN FACEBOOK PIXEL UTILITIES ===
+
+// Declare global scope to safely attach initialization status
+declare global {
+  interface Window {
+    fbqInitialized?: boolean;
+  }
+}
+
+// FIX: Create a robust tracking function that calls the imported 'trackEvent'
+const safeTrackEvent = (event: string, params?: Record<string, any>) => {
+  if (typeof window !== 'undefined' && window.fbqInitialized) {
+    try {
+      trackEvent(event, params); // Calls the imported function
+    } catch (e) {
+      console.error(`FB Pixel ${event} failed`, e);
+    }
+  }
+};
+
+// === END FACEBOOK PIXEL UTILITIES ===
+
+
 const ProductDetails = () => {
   const isMounted = useRef(true);
+  
+  // FIX: Use safe initialization pattern and call PageView robustly
   useEffect(() => {
-    initFacebookPixel();
-    fbqTrack("PageView");
+    if (typeof window !== 'undefined' && !window.fbqInitialized) {
+      try {
+        initFacebookPixel();
+        window.fbqInitialized = true;
+      } catch (e) {
+        console.error('FB Pixel init failed', e);
+      }
+    }
+    safeTrackEvent("PageView");
     return () => { isMounted.current = false; };
   }, []);
+  
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { addItem } = useCart();
@@ -87,13 +122,13 @@ const ProductDetails = () => {
             try {
               const parsed = JSON.parse((data as any).images);
               images = Array.isArray(parsed) 
-                ? parsed.filter((img: any) => img && typeof img === 'string' && img.trim())
+                ? parsed.filter((img: any): img is string => Boolean(img && typeof img === 'string' && img.trim()))
                 : ((data as any).images && (data as any).images.trim() ? [(data as any).images] : undefined);
             } catch {
               images = (data as any).images && (data as any).images.trim() ? [(data as any).images] : undefined;
             }
           } else if (Array.isArray((data as any).images)) {
-            images = (data as any).images.filter((img: any) => img && typeof img === 'string' && img.trim());
+            images = (data as any).images.filter((img: any): img is string => Boolean(img && typeof img === 'string' && img.trim()));
           }
         }
         
@@ -125,7 +160,6 @@ const ProductDetails = () => {
   }, [id]);
 
   // Get all images (from images array or fallback to image_url)
-  // Filter out any null/undefined/empty strings
   const allImages = useMemo(() => {
     if (!product) return [];
     try {
@@ -144,11 +178,21 @@ const ProductDetails = () => {
   useEffect(() => {
     if (product) {
       trackProductView(product.id, product.name);
+      
+      // FIX: Add ViewContent event for Meta Pixel
+      safeTrackEvent("ViewContent", {
+        content_name: product.name,
+        content_category: 'Product Page', 
+        content_ids: [product.id],
+        content_type: 'product',
+        value: parseFloat(product.price.toFixed(2)),
+        currency: 'BDT',
+      });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [product]);
 
-  // Auto-transition images every 5 seconds if multiple images
-  // This hook MUST be called before any early returns
+  // Auto-transition images every 50 seconds if multiple images
   useEffect(() => {
     if (!hasMultipleImages || allImages.length === 0) return;
 
@@ -174,7 +218,17 @@ const ProductDetails = () => {
     // Track product click
     trackProductClick(product.id, product.name);
 
-    // Track add to cart
+    // FIX: Add AddToCart event for Meta Pixel
+    safeTrackEvent("AddToCart", {
+      content_name: product.name,
+      content_ids: [product.id],
+      content_type: 'product',
+      value: parseFloat((product.price * quantity).toFixed(2)),
+      currency: 'BDT',
+      quantity: quantity,
+    });
+
+    // Track add to cart (Supabase activity)
     try {
       const sessionId = sessionStorage.getItem('tracking_session_id') || `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       if (!sessionStorage.getItem('tracking_session_id')) {
@@ -259,7 +313,7 @@ const ProductDetails = () => {
     );
   }
 
-  const stock = product.stock;
+  const {stock} = product;
 
   return (
     <div className="min-h-screen flex flex-col page-transition">

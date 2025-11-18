@@ -13,7 +13,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { Loader2 } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
-import { fbqTrack } from '@/fbpixel';
+import { initFacebookPixel, trackEvent } from '@/fbpixel'; // Assuming trackEvent is safeFbqTrack renamed
 
 interface Product {
   id: string;
@@ -29,7 +29,7 @@ interface Product {
 
 const ITEMS_PER_PAGE = 12;
 
-// FIX: Replaced Fragment <> with a single wrapper <div> to ensure stable DOM removal/insertion
+// FIX 1: Returns a single stable <div> container
 const AnimatedBackground = () => {
   return (
     <div className="absolute inset-0 w-full h-full">
@@ -49,7 +49,7 @@ const AnimatedBackground = () => {
   );
 };
 
-// FIX: Replaced Fragment <> with a single wrapper <div> to ensure stable DOM removal/insertion
+// FIX 2: Returns a single stable <div> container
 const BackgroundPlaceholder = () => {
   return (
     <div className="absolute inset-0 w-full h-full">
@@ -74,11 +74,11 @@ const Home = () => {
   const [sortBy, setSortBy] = useState<string>('priority');
   const [mounted, setMounted] = useState(false);
 
-  // Helper function to safely track fbq events
+  // Helper function to safely track fbq events (renamed from safeFbqTrack to match the import structure)
   const safeFbqTrack = (event: string, params?: Record<string, any>) => {
     if (typeof window !== 'undefined' && window.fbqInitialized) {
       try {
-        fbqTrack(event, params);
+        trackEvent(event, params); // Using imported trackEvent
       } catch (e) {
         console.error(`FB Pixel ${event} failed`, e);
       }
@@ -88,6 +88,7 @@ const Home = () => {
   // Safely fetch products with fallback for missing columns
   useEffect(() => {
     const fetchProducts = async () => {
+      setLoading(true);
       try {
         let data: any[] = [];
         let error: any = null;
@@ -100,7 +101,7 @@ const Home = () => {
           data = result.data;
           error = result.error;
         } else {
-          // Fallback: fetch without priority and images columns
+          // Fallback
           const fallbackResult: { data: any[] | null; error: any } = await supabase
             .from('products')
             .select('id,name,description,price,image_url,stock,created_at');
@@ -151,15 +152,14 @@ const Home = () => {
   // Safely initialize FB Pixel once
   useEffect(() => {
     if (typeof window !== 'undefined' && !window.fbqInitialized) {
-      import('@/fbpixel').then(({ initFacebookPixel }) => {
-        try {
+      // Use imported initFacebookPixel directly
+      try {
           initFacebookPixel();
           window.fbqInitialized = true;
           safeFbqTrack('PageView');
-        } catch (e) {
+      } catch (e) {
           console.error('FB Pixel init failed', e);
-        }
-      });
+      }
     }
   }, []);
 
@@ -232,15 +232,11 @@ const Home = () => {
     <div className="min-h-screen flex flex-col page-transition relative overflow-hidden">
       {/* Animated Background */}
       <div className="fixed inset-0 -z-10 overflow-hidden">
-        {/* FIX: Wrap conditional components in a div and use keys to force component remount on transition */}
+        {/* FIX 3: Conditionally render the stable components using unique keys */}
         {mounted ? (
-            <div key="animated-bg" className="absolute inset-0">
-                <AnimatedBackground />
-            </div>
+            <AnimatedBackground key="animated" />
         ) : (
-            <div key="placeholder-bg" className="absolute inset-0">
-                <BackgroundPlaceholder />
-            </div>
+            <BackgroundPlaceholder key="placeholder" />
         )}
       </div>
 

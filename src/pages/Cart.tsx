@@ -1,38 +1,5 @@
-import { fbqTrack, initFacebookPixel } from '@/fbpixel';
+// This file assumes the existence of the actual Facebook Pixel helper functions.
 
-// Strict helper to get the first valid image URL
-function getFirstImageUrl(imageData: any): string | null {
-  if (!imageData) return null;
-
-  const validImageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.avif'];
-
-  const isValidImage = (url: string) => {
-    if (!url || typeof url !== 'string') return false;
-    const lower = url.toLowerCase();
-    return validImageExts.some(ext => lower.endsWith(ext));
-  };
-
-  let urls: string[] = [];
-
-  // If it's already an array
-  if (Array.isArray(imageData)) {
-    urls = imageData;
-  } else if (typeof imageData === 'string') {
-    try {
-      const parsed = JSON.parse(imageData);
-      if (Array.isArray(parsed)) urls = parsed;
-      else urls = [imageData]; // single string
-    } catch {
-      urls = [imageData]; // not JSON, just a single URL string
-    }
-  }
-
-  // Filter only valid image URLs
-  const validImages = urls.filter(isValidImage);
-
-  // Return the first valid image or null
-  return validImages.length > 0 ? validImages[0] : null;
-}
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Header } from '@/components/Header';
@@ -48,11 +15,63 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { Trash2, Plus, Minus, CheckCircle2, Loader2 } from 'lucide-react';
 
+// === BEGIN FACEBOOK PIXEL/TRACKING UTILITIES ===
+
+// FIX: Import trackEvent (as per your import statement) and initFacebookPixel
+import { trackEvent, initFacebookPixel } from '@/fbpixel'; 
+
+// Declare global scope to safely attach initialization status
+declare global {
+  interface Window {
+    fbqInitialized?: boolean;
+  }
+}
+
+// Strict helper to get the first valid image URL (Function remains unchanged)
+function getFirstImageUrl(imageData: any): string | null {
+  if (!imageData) return null;
+
+  const validImageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.avif'];
+
+  const isValidImage = (url: string) => {
+    if (!url || typeof url !== 'string') return false;
+    const lower = url.toLowerCase();
+    return validImageExts.some(ext => lower.endsWith(ext));
+  };
+
+  let urls: string[] = [];
+
+  if (Array.isArray(imageData)) {
+    urls = imageData;
+  } else if (typeof imageData === 'string') {
+    try {
+      const parsed = JSON.parse(imageData);
+      if (Array.isArray(parsed)) urls = parsed;
+      else urls = [imageData]; 
+    } catch {
+      urls = [imageData];
+    }
+  }
+
+  const validImages = urls.filter(isValidImage);
+  return validImages.length > 0 ? validImages[0] : null;
+}
+
+// Reworked tracking function for robustness
+const safeFbqTrack = (event: string, params?: Record<string, any>) => {
+  if (typeof window !== 'undefined' && window.fbqInitialized) {
+    try {
+      // FIX: Call the correctly imported function: trackEvent
+      trackEvent(event, params); 
+    } catch (e) {
+      console.error(`FB Pixel ${event} failed`, e);
+    }
+  }
+};
+
+// === END FACEBOOK PIXEL/TRACKING UTILITIES ===
+
 const Cart = () => {
-  useEffect(() => {
-    initFacebookPixel();
-    fbqTrack("PageView");
-  }, []);
   const { items, removeItem, updateQuantity, clearCart, totalPrice } = useCart();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
@@ -70,6 +89,22 @@ const Cart = () => {
     inside_dhaka: 60,
     outside_dhaka: 120,
   });
+
+  // Centralized FB Pixel Initialization and PageView Tracking
+  useEffect(() => {
+    if (typeof window !== 'undefined' && !window.fbqInitialized) {
+      try {
+        initFacebookPixel();
+        window.fbqInitialized = true;
+        safeFbqTrack("PageView");
+      } catch (e) {
+        console.error('FB Pixel init failed', e);
+      }
+    } else if (window.fbqInitialized) {
+        // Track PageView even if the pixel was already initialized on another page
+        safeFbqTrack("PageView");
+    }
+  }, []);
 
   useEffect(() => {
     const fetchDeliveryCharges = async () => {
@@ -184,16 +219,17 @@ const Cart = () => {
         return;
       }
     
-      // 2️⃣ Fire InitiateCheckout before order creation
-      fbqTrack("InitiateCheckout", {
-        value: finalTotal,
+      // 2️⃣ Fire InitiateCheckout *safely* before order creation
+      safeFbqTrack("InitiateCheckout", {
+        value: parseFloat(finalTotal.toFixed(2)),
         currency: "BDT",
         num_items: items.length,
         contents: items.map(i => ({
           id: i.id,
           quantity: i.quantity,
-          item_price: i.price,
+          item_price: parseFloat(i.price.toFixed(2)),
         })),
+        content_type: "product", 
       });
     
       // 3️⃣ Create order
@@ -232,14 +268,14 @@ const Cart = () => {
         throw new Error(itemsError.message || 'অর্ডার আইটেম যোগ করতে সমস্যা হয়েছে');
       }
     
-      // 5️⃣ Fire Purchase event after order confirmed
-      fbqTrack("Purchase", {
-        value: finalTotal,
+      // 5️⃣ Fire Purchase event *safely* after order confirmed
+      safeFbqTrack("Purchase", {
+        value: parseFloat(finalTotal.toFixed(2)),
         currency: "BDT",
         contents: items.map(i => ({
           id: i.id,
           quantity: i.quantity,
-          item_price: i.price,
+          item_price: parseFloat(i.price.toFixed(2)),
         })),
         content_ids: items.map(i => i.id),
         content_type: "product",
@@ -255,8 +291,7 @@ const Cart = () => {
     } finally {
       setLoading(false);
     }
-
-    }
+  }
 
   if (items.length === 0) {
     return (
@@ -282,7 +317,6 @@ const Cart = () => {
         <div className="grid lg:grid-cols-3 gap-4 sm:gap-8">
           <div className="lg:col-span-2 space-y-3 sm:space-y-4">
             {items.map((item) => {
-              // Use improved getFirstImageUrl to strictly filter valid images (not video/invalid)
               const firstImageUrl = getFirstImageUrl(item.image_url);
               return (
                 <Card key={item.id} className="card-hover animate-fade-in">
@@ -315,21 +349,22 @@ const Cart = () => {
                           </Button>
                           <span className="w-10 sm:w-12 text-center font-semibold text-sm sm:text-base">{item.quantity}</span>
                           <Button
-  size="icon"
-  variant="outline"
-  className="h-7 w-7 sm:h-8 sm:w-8 transition-all duration-200 hover:scale-110"
-  onClick={() => {
-    fbqTrack("AddToCart", {
-      content_ids: [item.id],
-      content_type: "product",
-      value: item.price,
-      currency: "BDT",
-    });
-    updateQuantity(item.id, item.quantity + 1);
-  }}
->
-  <Plus className="h-3 w-3 sm:h-4 sm:w-4" />
-</Button>
+                            size="icon"
+                            variant="outline"
+                            className="h-7 w-7 sm:h-8 sm:w-8 transition-all duration-200 hover:scale-110"
+                            onClick={() => {
+                              // FIX 4: Use safeFbqTrack for AddToCart event
+                              safeFbqTrack("AddToCart", {
+                                content_ids: [item.id],
+                                content_type: "product",
+                                value: parseFloat(item.price.toFixed(2)),
+                                currency: "BDT",
+                              });
+                              updateQuantity(item.id, item.quantity + 1);
+                            }}
+                          >
+                            <Plus className="h-3 w-3 sm:h-4 sm:w-4" />
+                          </Button>
                           <Button
                             size="icon"
                             variant="destructive"
