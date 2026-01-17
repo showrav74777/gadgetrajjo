@@ -39,7 +39,7 @@ export const initFacebookPixel = (): void => {
     window.fbqInitialized = true;
     initialized = true;
 
-    window.fbq?.('init', '862723852989129'); // Replace with your Pixel ID
+    window.fbq?.('init', '1621565342528332'); // Replace with your Pixel ID
     window.fbq?.('track', 'PageView');
   } catch (err) {
     console.error('FB Pixel init failed', err);

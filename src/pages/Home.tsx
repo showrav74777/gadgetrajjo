@@ -232,12 +232,15 @@ const Home = () => {
     <div className="min-h-screen flex flex-col page-transition relative overflow-hidden">
       {/* Animated Background */}
       <div className="fixed inset-0 -z-10 overflow-hidden">
-        {/* FIX 3: Conditionally render the stable components using unique keys */}
-        {mounted ? (
-            <AnimatedBackground key="animated" />
-        ) : (
-            <BackgroundPlaceholder key="placeholder" />
-        )}
+        <video
+          autoPlay
+          loop
+          muted
+          playsInline
+          className="absolute inset-0 w-full h-full object-cover"
+        >
+          <source src="/landing.mp4" type="video/mp4" />
+        </video>
       </div>
 
       <Header onSearch={handleSearch} />
